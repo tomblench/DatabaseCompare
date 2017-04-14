@@ -83,7 +83,6 @@ public class Main {
         // TODO fix terrible URL mangling
         try {
             String jsonRequest = new GsonBuilder().create().toJson(revsToRequest);
-            System.out.println("request "+jsonRequest);
             HttpConnection hc = Http.POST(new URL(client2.getBaseUri() + "/" + databaseName2 + "/_missing_revs"),
                     "application/json");
             hc.setRequestBody(jsonRequest);
