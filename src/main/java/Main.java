@@ -41,20 +41,30 @@ public class Main {
         System.out.println("Getting all document ids");
 
         List<String> allDocs1 = database1.getAllDocsRequestBuilder().build().getResponse().getDocIds();
+        System.out.println("*");
         List<String> allDocs2 = database2.getAllDocsRequestBuilder().build().getResponse().getDocIds();
+        System.out.println("*");
 
-        Set<String> onlyInDb1 = new HashSet<>(allDocs1);
-        onlyInDb1.removeAll(allDocs2);
+        Set<String> onlyInDb1 = new TreeSet<>(allDocs1);
+        Set<String> allDocs2Set = new TreeSet<>(allDocs2);
+        System.out.println("*");
+        onlyInDb1.removeAll(allDocs2Set);
+        System.out.println("*");
 
-        Set<String> onlyInDb2 = new HashSet<>(allDocs2);
-        onlyInDb2.removeAll(allDocs1);
+        Set<String> onlyInDb2 = new TreeSet<>(allDocs2);
+        Set<String> allDocs1Set = new TreeSet<>(allDocs1);
+        System.out.println("*");
+        onlyInDb2.removeAll(allDocs1Set);
+        System.out.println("*");
 
         System.out.println("Documents only in db 1:"+ onlyInDb1);
         System.out.println("Documents only in db 2:"+ onlyInDb2);
 
-        Set<String> common = new HashSet<>(allDocs1);
-        common.retainAll(allDocs2);
+        Set<String> common = allDocs1Set;
+        common.retainAll(allDocs2Set);
         List<List<String>> batches = partition(common, 500);
+
+        System.out.println("Comparing "+batches.size()+" batches of revisions");
 
         Map<String, List<String>> missingRevsInDb2 = getMissingRevs(batches, client1, databaseName1, client2, databaseName2);
         Map<String, List<String>> missingRevsInDb1 = getMissingRevs(batches, client2, databaseName2, client1, databaseName1);
