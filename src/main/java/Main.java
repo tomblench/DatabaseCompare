@@ -94,7 +94,7 @@ public class Main {
 
         final Map<String, List<String>> missing = Collections.synchronizedMap(new HashMap<>());
 
-        ExecutorService service = Executors.newFixedThreadPool(8);
+        ExecutorService service = Executors.newFixedThreadPool(16);
         for (List<String> docIds : batches) {
 
             service.submit(new Runnable() {
