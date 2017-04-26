@@ -1,13 +1,11 @@
 import com.cloudant.client.api.ClientBuilder;
 import com.cloudant.client.api.CloudantClient;
 import com.cloudant.client.api.Database;
-import com.cloudant.client.api.model.Params;
 import com.cloudant.http.Http;
 import com.cloudant.http.HttpConnection;
+import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 
-import java.io.IOException;
-import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.*;
 
@@ -16,6 +14,8 @@ import java.util.*;
  */
 public class Main {
 
+    private static String fakeRevisionId = "9999-a";
+    private static Gson gson = new GsonBuilder().create();
 
     public static void main(String[] args) {
         if (args.length != 4) {
@@ -30,7 +30,7 @@ public class Main {
         }
     }
 
-    public static void compare(URL databaseUrl1, String databaseName1, URL databaseUrl2, String databaseName2) throws IOException {
+    public static void compare(URL databaseUrl1, String databaseName1, URL databaseUrl2, String databaseName2) throws Exception {
 
         CloudantClient client1 = ClientBuilder.url(databaseUrl1).build();
         CloudantClient client2 = ClientBuilder.url(databaseUrl2).build();
@@ -53,53 +53,52 @@ public class Main {
         Set<String> common = new HashSet<>(allDocs1);
         common.retainAll(allDocs2);
 
-        Map<String, List<String>> missingRevsInDb2 = getMissingRevs(common, database1, client2, databaseName2);
-        Map<String, List<String>> missingRevsInDb1 = getMissingRevs(common, database2, client1, databaseName1);
+        Map<String, List<String>> missingRevsInDb2 = getMissingRevs(common, client1, databaseName1, client2, databaseName2);
+        Map<String, List<String>> missingRevsInDb1 = getMissingRevs(common, client2, databaseName2, client1, databaseName1);
 
         System.out.println("Missing revs in db 1:"+missingRevsInDb1);
         System.out.println("Missing revs in db 2:"+missingRevsInDb2);
     }
 
-    public static Map<String, List<String>>  getMissingRevs(Set<String> docIds, Database database1, CloudantClient client2, String databaseName2) {
+    public static Map<String, List<String>>  getMissingRevs(Set<String> docIds, CloudantClient client1, String databaseName1, CloudantClient client2, String databaseName2) throws Exception {
 
-        Map<String, List<String>> revsToRequest = new HashMap<>();
+        Map<String, List<String>> revsDiffRequestDb1 = new HashMap<>();
+        Map<String, List<String>> revsDiffRequestDb2 = new HashMap<>();
+        Map<String, List<String>> missing = new HashMap<>();
 
+        // look in db1 - use a fake revision ID to fetch all leaf revisions
         for (String docId : docIds) {
-            // get winning
-            Map<String, Object> h2 = database1.find(HashMap.class, docId);
-            String rev = (String)h2.get("_rev");
-            List<String> revisions = new ArrayList<String>();
-            revisions.add(rev);
-            // get others
-            Params p = new Params();
-            p.addParam("conflicts", "true");
-            Map<String, Object> h = database1.find(HashMap.class, docId, p);
-            List<String> others = (List<String>)(h.get("_conflicts"));
-            if (others != null) {
-                revisions.addAll(others);
+            revsDiffRequestDb1.put(docId, Collections.singletonList(fakeRevisionId));
+        }
+        String jsonRequestDb1 = gson.toJson(revsDiffRequestDb1);
+        HttpConnection hc1 = Http.POST(new URL(client1.getBaseUri() + "/" + databaseName1 + "/_revs_diff"),
+                "application/json");
+        hc1.setRequestBody(jsonRequestDb1);
+        String response1 = client1.executeRequest(hc1).responseAsString();
+        Map<String, Object> responseMap1 = (Map<String, Object>)gson.fromJson(response1, Map.class);
+        for (String docId : responseMap1.keySet()) {
+            Map<String, List<String>> entry = (Map<String, List<String>>)responseMap1.get(docId);
+            List<String> revIds = entry.get("possible_ancestors");
+            if (revIds != null) {
+                revsDiffRequestDb2.put(docId, revIds);
             }
-            revsToRequest.put(docId, revisions);
         }
-        // TODO fix terrible URL mangling
-        try {
-            String jsonRequest = new GsonBuilder().create().toJson(revsToRequest);
-            HttpConnection hc = Http.POST(new URL(client2.getBaseUri() + "/" + databaseName2 + "/_missing_revs"),
-                    "application/json");
-            hc.setRequestBody(jsonRequest);
-            hc = client2.executeRequest(hc);
-            String response = hc.responseAsString();
-            Map responseMap = new GsonBuilder().create().fromJson(response, Map.class);
-            Map<String,List<String>> responseMapMissingRevs = (Map<String,List<String>>)responseMap.get("missing_revs");
-            return responseMapMissingRevs;
-        } catch (MalformedURLException mue ) {
-            // TODO
-            System.err.println(mue);
-        } catch (IOException ioe) {
-            // TODO
-            System.err.println(ioe);
-        }
-        return null;
-    }
 
+        // look in db2
+        String jsonRequestDb2 = gson.toJson(revsDiffRequestDb2);
+        HttpConnection hc2 = Http.POST(new URL(client2.getBaseUri() + "/" + databaseName2 + "/_revs_diff"),
+                "application/json");
+        hc2.setRequestBody(jsonRequestDb2);
+        String response2 = client2.executeRequest(hc2).responseAsString();
+        Map<String, Object> responseMap2 = (Map<String, Object>)gson.fromJson(response2, Map.class);
+        for (String docId : responseMap2.keySet()) {
+            Map<String, List<String>> entry = (Map<String, List<String>>)responseMap2.get(docId);
+            List<String> revIds = entry.get("missing");
+            if (revIds != null) {
+                missing.put(docId, revIds);
+            }
+        }
+        return missing;
+    }
 
 }
