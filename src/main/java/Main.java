@@ -8,6 +8,9 @@ import com.google.gson.GsonBuilder;
 
 import java.net.URL;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Created by tomblench on 13/04/2017.
@@ -23,14 +26,16 @@ public class Main {
         }
         try {
             compare(new URL(args[0]), args[1],
-                new URL(args[2]), args[3]);
+                    new URL(args[2]), args[3]);
         } catch (Exception e) {
-            System.err.println("Error: "+e);
+            System.err.println("Error: " + e);
             e.printStackTrace();
         }
     }
 
     public static void compare(URL databaseUrl1, String databaseName1, URL databaseUrl2, String databaseName2) throws Exception {
+
+        long start = System.currentTimeMillis();
 
         CloudantClient client1 = ClientBuilder.url(databaseUrl1).build();
         CloudantClient client2 = ClientBuilder.url(databaseUrl2).build();
@@ -38,39 +43,37 @@ public class Main {
         Database database1 = client1.database(databaseName1, false);
         Database database2 = client2.database(databaseName2, false);
 
-        System.out.println("Getting all document ids");
+        System.out.println("Getting all document ids...");
 
         List<String> allDocs1 = database1.getAllDocsRequestBuilder().build().getResponse().getDocIds();
-        System.out.println("*");
         List<String> allDocs2 = database2.getAllDocsRequestBuilder().build().getResponse().getDocIds();
-        System.out.println("*");
 
         Set<String> onlyInDb1 = new TreeSet<>(allDocs1);
         Set<String> allDocs2Set = new TreeSet<>(allDocs2);
-        System.out.println("*");
         onlyInDb1.removeAll(allDocs2Set);
-        System.out.println("*");
 
         Set<String> onlyInDb2 = new TreeSet<>(allDocs2);
         Set<String> allDocs1Set = new TreeSet<>(allDocs1);
-        System.out.println("*");
         onlyInDb2.removeAll(allDocs1Set);
-        System.out.println("*");
 
-        System.out.println("Documents only in db 1:"+ onlyInDb1);
-        System.out.println("Documents only in db 2:"+ onlyInDb2);
+        System.out.println("Documents only in db 1:" + onlyInDb1);
+        System.out.println("Documents only in db 2:" + onlyInDb2);
 
         Set<String> common = allDocs1Set;
         common.retainAll(allDocs2Set);
         List<List<String>> batches = partition(common, 500);
 
-        System.out.println("Comparing "+batches.size()+" batches of revisions");
+        System.out.println("Comparing " + batches.size() + " batches of revisions...");
 
         Map<String, List<String>> missingRevsInDb2 = getMissingRevs(batches, client1, databaseName1, client2, databaseName2);
         Map<String, List<String>> missingRevsInDb1 = getMissingRevs(batches, client2, databaseName2, client1, databaseName1);
 
-        System.out.println("Missing revs in db 1:"+missingRevsInDb1);
-        System.out.println("Missing revs in db 2:"+missingRevsInDb2);
+        System.out.println("Missing revs in db 1:" + missingRevsInDb1);
+        System.out.println("Missing revs in db 2:" + missingRevsInDb2);
+
+        long end = System.currentTimeMillis();
+
+        System.out.println(String.format("Time taken: %.1f seconds", ((double)(end-start)/1000.0)));
     }
 
     public static <T> List<List<T>> partition(Collection list, int size) {
@@ -89,48 +92,71 @@ public class Main {
 
     public static Map<String, List<String>> getMissingRevs(List<List<String>> batches, CloudantClient client1, String databaseName1, CloudantClient client2, String databaseName2) throws Exception {
 
-        Map<String, List<String>> missing = new HashMap<>();
+        final Map<String, List<String>> missing = Collections.synchronizedMap(new HashMap<>());
 
-        Map<String, List<String>> revsDiffRequestDb1 = new HashMap<>();
-        Map<String, List<String>> revsDiffRequestDb2 = new HashMap<>();
-
+        ExecutorService service = Executors.newFixedThreadPool(8);
         for (List<String> docIds : batches) {
 
-            System.out.print(".");
+            service.submit(new Runnable() {
+                @Override
+                public void run() {
 
-            // look in db1 - use a fake revision ID to fetch all leaf revisions
-            for (String docId : docIds) {
-                revsDiffRequestDb1.put(docId, Collections.singletonList(fakeRevisionId));
-            }
-            String jsonRequestDb1 = gson.toJson(revsDiffRequestDb1);
-            HttpConnection hc1 = Http.POST(new URL(client1.getBaseUri() + "/" + databaseName1 + "/_revs_diff"),
-                    "application/json");
-            hc1.setRequestBody(jsonRequestDb1);
-            String response1 = client1.executeRequest(hc1).responseAsString();
-            Map<String, Object> responseMap1 = (Map<String, Object>) gson.fromJson(response1, Map.class);
-            for (String docId : responseMap1.keySet()) {
-                Map<String, List<String>> entry = (Map<String, List<String>>) responseMap1.get(docId);
-                List<String> revIds = entry.get("possible_ancestors");
-                if (revIds != null) {
-                    revsDiffRequestDb2.put(docId, revIds);
-                }
-            }
+                    try {
 
-            // look in db2
-            String jsonRequestDb2 = gson.toJson(revsDiffRequestDb2);
-            HttpConnection hc2 = Http.POST(new URL(client2.getBaseUri() + "/" + databaseName2 + "/_revs_diff"),
-                    "application/json");
-            hc2.setRequestBody(jsonRequestDb2);
-            String response2 = client2.executeRequest(hc2).responseAsString();
-            Map<String, Object> responseMap2 = (Map<String, Object>) gson.fromJson(response2, Map.class);
-            for (String docId : responseMap2.keySet()) {
-                Map<String, List<String>> entry = (Map<String, List<String>>) responseMap2.get(docId);
-                List<String> revIds = entry.get("missing");
-                if (revIds != null) {
-                    missing.put(docId, revIds);
+                        Map<String, List<String>> revsDiffRequestDb1 = new HashMap<>();
+                        Map<String, List<String>> revsDiffRequestDb2 = new HashMap<>();
+
+
+                        System.out.print(".");
+
+                        // look in db1 - use a fake revision ID to fetch all leaf revisions
+                        for (String docId : docIds) {
+                            revsDiffRequestDb1.put(docId, Collections.singletonList(fakeRevisionId));
+                        }
+                        String jsonRequestDb1 = gson.toJson(revsDiffRequestDb1);
+                        HttpConnection hc1 = Http.POST(new URL(client1.getBaseUri() + "/" + databaseName1 + "/_revs_diff"),
+                                "application/json");
+                        hc1.setRequestBody(jsonRequestDb1);
+                        String response1 = client1.executeRequest(hc1).responseAsString();
+                        Map<String, Object> responseMap1 = (Map<String, Object>) gson.fromJson(response1, Map.class);
+                        for (String docId : responseMap1.keySet()) {
+                            Map<String, List<String>> entry = (Map<String, List<String>>) responseMap1.get(docId);
+                            List<String> revIds = entry.get("possible_ancestors");
+                            if (revIds != null) {
+                                revsDiffRequestDb2.put(docId, revIds);
+                            }
+                        }
+
+                        // look in db2
+                        String jsonRequestDb2 = gson.toJson(revsDiffRequestDb2);
+                        HttpConnection hc2 = Http.POST(new URL(client2.getBaseUri() + "/" + databaseName2 + "/_revs_diff"),
+                                "application/json");
+                        hc2.setRequestBody(jsonRequestDb2);
+                        String response2 = client2.executeRequest(hc2).responseAsString();
+                        Map<String, Object> responseMap2 = (Map<String, Object>) gson.fromJson(response2, Map.class);
+                        for (String docId : responseMap2.keySet()) {
+                            Map<String, List<String>> entry = (Map<String, List<String>>) responseMap2.get(docId);
+                            List<String> revIds = entry.get("missing");
+                            if (revIds != null) {
+                                missing.put(docId, revIds);
+                            }
+                        }
+
+                    } catch (
+                            Exception e)
+
+                    {
+                        System.err.println(e);
+                        e.printStackTrace();
+                    }
                 }
-            }
+            });
         }
+        // wait
+        service.shutdown();
+        service.awaitTermination(10, TimeUnit.HOURS);
+
+
         System.out.println("");
         return missing;
     }
