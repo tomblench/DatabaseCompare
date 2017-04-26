@@ -106,7 +106,6 @@ public class Main {
                         Map<String, List<String>> revsDiffRequestDb1 = new HashMap<>();
                         Map<String, List<String>> revsDiffRequestDb2 = new HashMap<>();
 
-
                         System.out.print(".");
 
                         // look in db1 - use a fake revision ID to fetch all leaf revisions
@@ -141,11 +140,7 @@ public class Main {
                                 missing.put(docId, revIds);
                             }
                         }
-
-                    } catch (
-                            Exception e)
-
-                    {
+                    } catch (Exception e) {
                         System.err.println(e);
                         e.printStackTrace();
                     }
