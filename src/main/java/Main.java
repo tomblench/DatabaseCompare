@@ -23,19 +23,24 @@ public class Main {
     public static void main(String[] args) {
         if (args.length != 4) {
             System.err.println("Error: Usage: DatabaseCompare url1 database1 url2 database2");
+            System.exit(-1);
         }
         try {
-            compare(new URL(args[0]), args[1],
-                    new URL(args[2]), args[3]);
+            // return 0 if databases are the same, 1 if different
+            int returnCode = compare(new URL(args[0]), args[1], new URL(args[2]), args[3]) ? 0 : 1;
+            System.exit(returnCode);
         } catch (Exception e) {
             System.err.println("Error: " + e);
             e.printStackTrace();
+            System.exit(-1);
         }
     }
 
-    public static void compare(URL databaseUrl1, String databaseName1, URL databaseUrl2, String databaseName2) throws Exception {
+    // return true if databases are the same, false if different
+    public static boolean compare(URL databaseUrl1, String databaseName1, URL databaseUrl2, String databaseName2) throws Exception {
 
         long start = System.currentTimeMillis();
+        boolean databasesSame;
 
         CloudantClient client1 = ClientBuilder.url(databaseUrl1).build();
         CloudantClient client2 = ClientBuilder.url(databaseUrl2).build();
@@ -58,6 +63,7 @@ public class Main {
 
         System.out.println("Documents only in db 1:" + onlyInDb1);
         System.out.println("Documents only in db 2:" + onlyInDb2);
+        databasesSame = onlyInDb1.isEmpty() && onlyInDb2.isEmpty();
 
         Set<String> common = allDocs1Set;
         common.retainAll(allDocs2Set);
@@ -70,10 +76,12 @@ public class Main {
 
         System.out.println("Missing revs in db 1:" + missingRevsInDb1);
         System.out.println("Missing revs in db 2:" + missingRevsInDb2);
+        databasesSame = databasesSame && missingRevsInDb1.isEmpty() && missingRevsInDb2.isEmpty();
 
         long end = System.currentTimeMillis();
 
         System.out.println(String.format("Time taken: %.1f seconds", ((double)(end-start)/1000.0)));
+        return databasesSame;
     }
 
     public static <T> List<List<T>> partition(Collection list, int size) {
